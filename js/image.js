@@ -1,5 +1,5 @@
-// 사진 줄이기: 폰에서 고른 사진을 기록용(긴 변 1600px, 약 0.3MB)과
-// 미리보기용(긴 변 480px, 약 40KB) 두 가지 JPEG로 만들어요. 원본은 폰에 그대로 남아요.
+// 사진 줄이기: 폰에서 고른 사진을 기록용(긴 변 1280px, 약 0.2MB)과
+// 미리보기용(긴 변 400px, 약 30KB) 두 가지 JPEG로 만들어요. 원본은 폰에 그대로 남아요.
 (function () {
   async function decode(file) {
     if (window.createImageBitmap) {
@@ -44,8 +44,8 @@
 
   async function compress(file) {
     const src = await decode(file);
-    const full = await render(src, 1600, 340 * 1024);
-    const thumb = await render(src, 480, 48 * 1024);
+    const full = await render(src, 1280, 200 * 1024);
+    const thumb = await render(src, 400, 32 * 1024);
     if (src.close) src.close();
     return { full: full.blob, thumb: thumb.blob, width: full.w, height: full.h };
   }

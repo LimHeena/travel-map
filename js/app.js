@@ -15,7 +15,8 @@
   const today = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
   const fmtDate = d => { if (!d) return "날짜 없음"; const [y, m, dd] = d.split("-"); return `${y}. ${+m}. ${+dd}.`; };
   const fmtMB = b => (b / 1024 / 1024).toFixed(b < 10 * 1024 * 1024 ? 1 : 0) + "MB";
-  const KIND_LABEL = { kr: "국내", world: "세계" };
+  const KIND_LABEL = { kr: "국내", seoul: "서울", world: "세계" };
+  const KIND_TITLE = { kr: "국내 여행지도", seoul: "서울 여행지도", world: "세계 여행지도" };
 
   const ICON = {
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
@@ -101,7 +102,9 @@
       if (highlight === r.id) cls += " hot";
       paths += `<path class="${cls}" d="${r.d}"${fill}${interactive ? ` data-r="${r.id}"` : ""}><title>${esc(r.group ? r.group + " " + r.name : r.name)}</title></path>`;
     }
-    return `<svg viewBox="0 0 ${g.w} ${g.h}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(map.title)} 지도"><defs>${defs}</defs><g>${paths}</g></svg>`;
+    const borders = g.borders ? `<path class="borders" d="${g.borders}"/>` : "";
+    const labels = interactive ? `<g class="labels">${g.regions.map(r => `<text x="${r.c[0]}" y="${r.c[1]}" data-lw="${r.lw}" data-n="${r.name.length}">${esc(r.name)}</text>`).join("")}</g>` : "";
+    return `<svg viewBox="0 0 ${g.w} ${g.h}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(map.title)} 지도"><defs>${defs}</defs><g>${paths}</g>${borders}${labels}</svg>`;
   }
 
   // ───────── shell ─────────
@@ -163,6 +166,7 @@
       <div class="gutter stack">
         <div class="choice" role="group" aria-label="지도 종류">
           <button data-k="kr" aria-pressed="true">${mapSVG(tmp("kr"))}<span>국내지도</span></button>
+          <button data-k="seoul" aria-pressed="false">${mapSVG(tmp("seoul"))}<span>서울지도</span></button>
           <button data-k="world" aria-pressed="false">${mapSVG(tmp("world"))}<span>세계지도</span></button>
         </div>
         <div class="field"><label for="nm-title">지도 이름</label><input id="nm-title" maxlength="40" value="국내 여행지도"></div>
@@ -171,13 +175,13 @@
     const inp = $("#nm-title", s.el);
     s.el.querySelector(".choice").onclick = e => {
       const b = e.target.closest("[data-k]"); if (!b) return;
-      const prevDefault = kind === "kr" ? "국내 여행지도" : "세계 여행지도";
+      const prevDefault = KIND_TITLE[kind];
       kind = b.dataset.k;
       s.el.querySelectorAll("[data-k]").forEach(x => x.setAttribute("aria-pressed", x === b));
-      if (!inp.value.trim() || inp.value === prevDefault) inp.value = kind === "kr" ? "국내 여행지도" : "세계 여행지도";
+      if (!inp.value.trim() || inp.value === prevDefault) inp.value = KIND_TITLE[kind];
     };
     $("#nm-go", s.el).onclick = async () => {
-      const title = inp.value.trim() || (kind === "kr" ? "국내 여행지도" : "세계 여행지도");
+      const title = inp.value.trim() || KIND_TITLE[kind];
       $("#nm-go", s.el).disabled = true;
       try { await store.createMap(kind, title); await refresh(); s.close(); render(); toast("지도를 만들었어요"); }
       catch (err) { $("#nm-go", s.el).disabled = false; toast("만들지 못했어요: " + err.message, 4000); }
@@ -216,10 +220,23 @@
           <div class="zoomctl"><button data-x="in" aria-label="확대">${ICON.plus}</button><button data-x="out" aria-label="축소">${ICON.minus}</button><button data-x="fit" aria-label="전체 보기">${ICON.fit}</button></div>
         </div>`;
       const svg = $(".mapstage > svg", wrap);
-      if (keep) setVB(svg);
+      if (keep) setVB(svg); else requestAnimationFrame(() => updateLabels(svg));
       bindStage(svg);
     }
-    function setVB(svg) { (svg || $(".mapstage > svg", wrap)).setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`); }
+    function setVB(svg) { svg = svg || $(".mapstage > svg", wrap); svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`); updateLabels(svg); }
+    function updateLabels(svg) {
+      const lg = svg.querySelector(".labels"); if (!lg) return;
+      const r = svg.getBoundingClientRect(); if (!r.width) return;
+      const k = Math.min(r.width / vb.w, r.height / vb.h); // screen px per map unit
+      const fs = 11 / k;
+      lg.setAttribute("font-size", fs.toFixed(3)); lg.style.strokeWidth = (3 / k).toFixed(3);
+      for (const t of lg.children) {
+        const need = (+t.dataset.n) * 11.5 + 6; // label width in px
+        const x = +t.getAttribute("x"), y = +t.getAttribute("y");
+        const inView = x > vb.x && x < vb.x + vb.w && y > vb.y && y < vb.y + vb.h;
+        t.style.display = inView && (+t.dataset.lw) * k >= need ? "" : "none";
+      }
+    }
     function toSvg(svg, cx, cy) { const pt = svg.createSVGPoint(); pt.x = cx; pt.y = cy; return pt.matrixTransform(svg.getScreenCTM().inverse()); }
     function zoomAt(svg, cx, cy, f) {
       const minW = base.w / 14, maxW = base.w * 1.15;
@@ -285,7 +302,7 @@
     const g = geoOf(m); const vis = visitedRegions(m.id);
     const s = sheet(`
       <div class="sheet-head gutter"><button class="iconbtn" data-close aria-label="닫기">${ICON.close}</button><h2>지역 찾기</h2><span></span></div>
-      <div class="gutter stack"><div class="field"><input id="rs-q" placeholder="${m.kind === "kr" ? "예: 강릉, 제주" : "예: 일본, 프랑스"}" autocomplete="off" aria-label="지역 이름"></div><div class="tl" id="rs-list"></div></div>`, { full: true });
+      <div class="gutter stack"><div class="field"><input id="rs-q" placeholder="${m.kind === "kr" ? "예: 강릉, 제주" : m.kind === "seoul" ? "예: 마포, 강남" : "예: 일본, 프랑스"}" autocomplete="off" aria-label="지역 이름"></div><div class="tl" id="rs-list"></div></div>`, { full: true });
     const list = $("#rs-list", s.el), q = $("#rs-q", s.el);
     const draw = () => {
       const k = q.value.trim();
@@ -364,7 +381,7 @@
       <div class="gutter stack">
         <div class="field"><label for="ee-date">다녀온 날</label><input type="date" id="ee-date" value="${esc(entry ? entry.visited_on || "" : today())}"></div>
         <div class="field"><label for="ee-memo">메모</label><textarea id="ee-memo" maxlength="5000" placeholder="누구랑, 뭐 먹었는지, 기억하고 싶은 것">${esc(entry ? entry.memo : "")}</textarea></div>
-        <div class="field"><span class="lbl">사진 (올릴 때 자동으로 0.3MB 안팎으로 줄여요)</span><div class="grid" id="ee-grid"></div>
+        <div class="field"><span class="lbl">사진 (올릴 때 자동으로 0.2MB 안팎으로 줄여요)</span><div class="grid" id="ee-grid"></div>
           <label class="btn block" for="ee-file" style="margin-top:6px">${ICON.photo}사진 고르기</label><input type="file" id="ee-file" accept="image/*" multiple hidden></div>
         <div id="ee-prog" hidden><div class="progress"><i></i></div><p class="lbl" id="ee-ptxt" style="margin:6px 0 0"></p></div>
         <button class="btn primary block" id="ee-save">저장</button>
@@ -434,7 +451,7 @@
   async function renderSettings(v) {
     const used = S.data.photos.reduce((a, p) => a + (p.bytes || 0), 0);
     const pct = Math.min(100, used / LIMIT * 100);
-    const left = Math.max(0, Math.floor((LIMIT - used) / (380 * 1024)));
+    const left = Math.max(0, Math.floor((LIMIT - used) / (215 * 1024)));
     const sess = await store.session();
     v.innerHTML = `<div class="stack">
       ${DEMO ? `<div class="banner">체험 모드로 실행 중이에요. 설정 파일에 Supabase 주소를 넣으면 친구와 함께 쓰는 모드로 바뀌어요.</div>` : ""}
@@ -565,8 +582,8 @@
   // ───────── boot ─────────
   async function loadGeo() {
     if (window.__MAPDATA) { S.geo = window.__MAPDATA; return; }
-    const [kr, world] = await Promise.all(["data/kr.json", "data/world.json"].map(u => fetch(u).then(r => r.json())));
-    S.geo = { kr, world };
+    const [kr, world, seoul] = await Promise.all(["data/kr.json", "data/world.json", "data/seoul.json"].map(u => fetch(u).then(r => r.json())));
+    S.geo = { kr, world, seoul };
   }
   async function start() {
     if (!DEMO) {
