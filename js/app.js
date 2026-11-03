@@ -7,7 +7,10 @@
   const LIMIT = (CFG.STORAGE_LIMIT_MB || 1024) * 1024 * 1024;
   const root = document.getElementById("app");
 
-  const S = { data: { maps: [], entries: [], photos: [], covers: [] }, geo: {}, tab: "maps", openMapId: null, urls: {} };
+  const S = { data: { maps: [], entries: [], photos: [], covers: [], walks: [] }, geo: {}, tab: "maps", openMapId: null, urls: {}, mode: "travel", me: "", pathCache: {}, wkey: {} };
+  try { if (localStorage.getItem("tm-mode") === "walk") S.mode = "walk"; } catch (e) { /* ignore */ }
+  const WALKERS = CFG.WALKERS || [];
+  const TOGETHER = CFG.TOGETHER || { name: "함께", color: "#b06ce8" };
 
   // ───────── helpers ─────────
   const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -30,6 +33,8 @@
     map: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z"/><path d="M9 4v14M15 6v14"/></svg>',
     list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>',
     gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" stroke-linecap="round"/></svg>',
+    shoe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17c0-3 1-9 3-11 1.5-1.5 4 0 4 2 0 3-2 4-2 7 0 1 .5 2 2 2h4c2 0 5 .5 5 2.5 0 .8-.6 1.5-1.5 1.5H6c-1.2 0-2-1-2-2z"/></svg>',
+    upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>',
     photo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5" width="18" height="15" rx="2"/><circle cx="9" cy="11" r="2"/><path d="M21 17l-5-5-9 8"/></svg>',
   };
 
@@ -55,8 +60,14 @@
   }
 
   // ───────── data ─────────
+  async function sha10(t) {
+    try { const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)); return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, "0")).join("").slice(0, 10); }
+    catch (e) { return ""; }
+  }
   async function refresh() {
     S.data = await store.getAll();
+    S.data.walks = S.data.walks || [];
+    for (const w of S.data.walks) if (w.walker && !(w.walker in S.wkey)) S.wkey[w.walker] = await sha10(w.walker);
     const paths = coverPhotos().map(p => p.thumb_path);
     Object.assign(S.urls, await store.urls(paths));
   }
@@ -111,21 +122,30 @@
   function shell() {
     root.innerHTML = `
       <header class="topbar gutter"><span></span><h1 class="brand" id="title">${esc(APP)}</h1><span></span></header>
+      <div class="modebar gutter"><div class="seg mode" role="tablist" aria-label="기록 종류">
+        <button role="tab" data-mode="travel">여행기록</button><button role="tab" data-mode="walk">발자취</button></div></div>
       <main class="gutter" id="view"></main>
-      <nav class="tabbar" aria-label="메뉴">
-        <button data-tab="maps">${ICON.map}<span>여행지도</span></button>
-        <button data-tab="timeline">${ICON.list}<span>기록</span></button>
-        <button data-tab="settings">${ICON.gear}<span>설정</span></button>
-      </nav>`;
+      <nav class="tabbar" aria-label="메뉴"></nav>`;
     root.querySelector(".tabbar").addEventListener("click", e => { const b = e.target.closest("[data-tab]"); if (b) { S.tab = b.dataset.tab; render(); window.scrollTo(0, 0); } });
+    root.querySelector(".modebar").addEventListener("click", e => {
+      const b = e.target.closest("[data-mode]"); if (!b || b.dataset.mode === S.mode) return;
+      S.mode = b.dataset.mode; try { localStorage.setItem("tm-mode", S.mode); } catch (x) { /* ignore */ }
+      if (S.tab !== "settings") S.tab = "maps";
+      render(); window.scrollTo(0, 0);
+    });
     render();
   }
   function render() {
-    root.querySelectorAll(".tabbar button").forEach(b => { if (b.dataset.tab === S.tab) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current"); });
+    root.querySelectorAll("[data-mode]").forEach(b => b.setAttribute("aria-selected", b.dataset.mode === S.mode));
+    const tabs = S.mode === "walk"
+      ? [["maps", ICON.map, "발자취 지도"], ["timeline", ICON.shoe, "산책 목록"], ["settings", ICON.gear, "설정"]]
+      : [["maps", ICON.map, "여행지도"], ["timeline", ICON.list, "기록"], ["settings", ICON.gear, "설정"]];
+    root.querySelector(".tabbar").innerHTML = tabs.map(([k, ic, l]) => `<button data-tab="${k}"${k === S.tab ? ' aria-current="page"' : ""}>${ic}<span>${l}</span></button>`).join("");
     const v = $("#view");
-    if (S.tab === "maps") renderMaps(v);
-    else if (S.tab === "timeline") renderTimeline(v);
-    else renderSettings(v);
+    if (S.tab === "settings") renderSettings(v);
+    else if (S.mode === "walk") (S.tab === "maps" ? renderWalkMaps : renderWalkList)(v);
+    else if (S.tab === "maps") renderMaps(v);
+    else renderTimeline(v);
   }
 
   // ───────── maps tab ─────────
@@ -199,39 +219,19 @@
     };
   }
 
-  // ───────── map view (pan / zoom / tap) ─────────
-  function openMap(id, thenRegion) {
-    const m = S.data.maps.find(x => x.id === id); if (!m) return;
-    S.openMapId = id;
-    const g = geoOf(m);
-    const wrap = document.createElement("section"); wrap.className = "mapview";
-    document.body.appendChild(wrap);
-    let vb = { x: 0, y: 0, w: g.w, h: g.h };
-    const base = { ...vb };
-
-    function draw(keep) {
-      const vis = visitedRegions(m.id).size;
-      wrap.innerHTML = `
-        <header class="topbar gutter" style="top:0"><button class="iconbtn" data-x="back" aria-label="뒤로">${ICON.back}</button>
-          <h1>${esc(m.title)}<small>${g.regions.length}곳 중 ${vis}곳 방문</small></h1>
-          <button class="iconbtn" data-x="search" aria-label="지역 찾기">${ICON.search}</button></header>
-        <div class="mapstage">${mapSVG(m, { interactive: true })}
-          ${vis === 0 ? `<div class="hint">지역을 눌러 기록을 남겨 보세요</div>` : ""}
-          <div class="zoomctl"><button data-x="in" aria-label="확대">${ICON.plus}</button><button data-x="out" aria-label="축소">${ICON.minus}</button><button data-x="fit" aria-label="전체 보기">${ICON.fit}</button></div>
-        </div>`;
-      const svg = $(".mapstage > svg", wrap);
-      if (keep) setVB(svg); else requestAnimationFrame(() => updateLabels(svg));
-      bindStage(svg);
-    }
-    function setVB(svg) { svg = svg || $(".mapstage > svg", wrap); svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`); updateLabels(svg); }
+  // ───────── pan / zoom stage (공용) ─────────
+  function stage(wrap, base, { minDiv = 14, onTap, onScale } = {}) {
+    let vb = { ...base };
+    const svgEl = () => $(".mapstage > svg", wrap);
+    function setVB(svg) { svg = svg || svgEl(); if (!svg) return; svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`); updateLabels(svg); }
     function updateLabels(svg) {
-      const lg = svg.querySelector(".labels"); if (!lg) return;
       const r = svg.getBoundingClientRect(); if (!r.width) return;
       const k = Math.min(r.width / vb.w, r.height / vb.h); // screen px per map unit
-      const fs = 11 / k;
-      lg.setAttribute("font-size", fs.toFixed(3)); lg.style.strokeWidth = (3 / k).toFixed(3);
+      if (onScale) onScale(svg, k);
+      const lg = svg.querySelector(".labels"); if (!lg) return;
+      lg.setAttribute("font-size", (11 / k).toFixed(4)); lg.style.strokeWidth = (3 / k).toFixed(4);
       for (const t of lg.children) {
-        const need = (+t.dataset.n) * 11.5 + 6; // label width in px
+        const need = (+t.dataset.n) * 11.5 + 6;
         const x = +t.getAttribute("x"), y = +t.getAttribute("y");
         const inView = x > vb.x && x < vb.x + vb.w && y > vb.y && y < vb.y + vb.h;
         t.style.display = inView && (+t.dataset.lw) * k >= need ? "" : "none";
@@ -239,7 +239,7 @@
     }
     function toSvg(svg, cx, cy) { const pt = svg.createSVGPoint(); pt.x = cx; pt.y = cy; return pt.matrixTransform(svg.getScreenCTM().inverse()); }
     function zoomAt(svg, cx, cy, f) {
-      const minW = base.w / 14, maxW = base.w * 1.15;
+      const minW = base.w / minDiv, maxW = base.w * 1.15;
       const nw = Math.min(maxW, Math.max(minW, vb.w / f)); f = vb.w / nw;
       const p = toSvg(svg, cx, cy);
       vb = { x: p.x - (p.x - vb.x) / f, y: p.y - (p.y - vb.y) / f, w: vb.w / f, h: vb.h / f };
@@ -248,11 +248,11 @@
     function panBy(svg, dx, dy) {
       const r = svg.getBoundingClientRect(); const u = Math.max(vb.w / r.width, vb.h / r.height);
       vb.x -= dx * u; vb.y -= dy * u;
-      vb.x = Math.min(base.w - vb.w * 0.2, Math.max(-vb.w * 0.8, vb.x));
-      vb.y = Math.min(base.h - vb.h * 0.2, Math.max(-vb.h * 0.8, vb.y));
+      vb.x = Math.min(base.x + base.w - vb.w * 0.2, Math.max(base.x - vb.w * 0.8, vb.x));
+      vb.y = Math.min(base.y + base.h - vb.h * 0.2, Math.max(base.y - vb.h * 0.8, vb.y));
       setVB(svg);
     }
-    function bindStage(svg) {
+    function bind(svg) {
       const pts = new Map(); let start = null, last = null, moved = 0, pinch = null;
       svg.addEventListener("pointerdown", e => {
         svg.setPointerCapture && svg.setPointerCapture(e.pointerId);
@@ -276,25 +276,55 @@
         pts.delete(e.pointerId);
         if (pts.size < 2) pinch = null;
         if (pts.size === 1) { const p = [...pts.values()][0]; last = { ...p }; }
-        if (pts.size === 0 && start && moved <= 6 && Date.now() - start.t < 600) {
-          const el = document.elementFromPoint(e.clientX, e.clientY); const r = el && el.closest && el.closest("[data-r]");
-          if (r) openRegion(m, r.dataset.r, () => draw(true));
-        }
+        if (pts.size === 0 && start && moved <= 6 && Date.now() - start.t < 600 && onTap) onTap(e.clientX, e.clientY);
       };
       svg.addEventListener("pointerup", up); svg.addEventListener("pointercancel", e => { pts.delete(e.pointerId); pinch = null; moved = 99; });
       svg.addEventListener("wheel", e => { e.preventDefault(); zoomAt(svg, e.clientX, e.clientY, e.deltaY < 0 ? 1.15 : 1 / 1.15); }, { passive: false });
     }
+    function zoomCenter(f) { const svg = svgEl(), r = svg.getBoundingClientRect(); zoomAt(svg, r.left + r.width / 2, r.top + r.height / 2, f); }
+    return {
+      bind, setVB, zoomCenter,
+      fit() { vb = { ...base }; setVB(); },
+      show(box) { vb = { ...box }; setVB(); },
+      labels() { const svg = svgEl(); if (svg) requestAnimationFrame(() => updateLabels(svg)); },
+    };
+  }
+  const ZOOMCTL = `<div class="zoomctl"><button data-x="in" aria-label="확대">${ICON.plus}</button><button data-x="out" aria-label="축소">${ICON.minus}</button><button data-x="fit" aria-label="전체 보기">${ICON.fit}</button></div>`;
+
+  // ───────── map view (여행기록) ─────────
+  function openMap(id, thenRegion) {
+    const m = S.data.maps.find(x => x.id === id); if (!m) return;
+    S.openMapId = id;
+    const g = geoOf(m);
+    const wrap = document.createElement("section"); wrap.className = "mapview";
+    document.body.appendChild(wrap);
+    const st = stage(wrap, { x: 0, y: 0, w: g.w, h: g.h }, {
+      onTap: (x, y) => { const el = document.elementFromPoint(x, y); const r = el && el.closest && el.closest("[data-r]"); if (r) openRegion(m, r.dataset.r, () => draw(true)); },
+    });
+    function draw(keep) {
+      const vis = visitedRegions(m.id).size;
+      wrap.innerHTML = `
+        <header class="topbar gutter" style="top:0"><button class="iconbtn" data-x="back" aria-label="뒤로">${ICON.back}</button>
+          <h1>${esc(m.title)}<small>${g.regions.length}곳 중 ${vis}곳 방문</small></h1>
+          <button class="iconbtn" data-x="search" aria-label="지역 찾기">${ICON.search}</button></header>
+        <div class="mapstage">${mapSVG(m, { interactive: true })}
+          ${vis === 0 ? `<div class="hint">지역을 눌러 기록을 남겨 보세요</div>` : ""}
+          ${ZOOMCTL}
+        </div>`;
+      const svg = $(".mapstage > svg", wrap);
+      if (keep) st.setVB(svg); else st.labels();
+      st.bind(svg);
+    }
     wrap.addEventListener("click", e => {
       const b = e.target.closest("[data-x]"); if (!b) return;
-      const svg = $(".mapstage > svg", wrap); const r = svg.getBoundingClientRect();
       if (b.dataset.x === "back") { wrap.remove(); S.openMapId = null; render(); }
-      else if (b.dataset.x === "in") zoomAt(svg, r.left + r.width / 2, r.top + r.height / 2, 1.6);
-      else if (b.dataset.x === "out") zoomAt(svg, r.left + r.width / 2, r.top + r.height / 2, 1 / 1.6);
-      else if (b.dataset.x === "fit") { vb = { ...base }; setVB(svg); }
+      else if (b.dataset.x === "in") st.zoomCenter(1.6);
+      else if (b.dataset.x === "out") st.zoomCenter(1 / 1.6);
+      else if (b.dataset.x === "fit") st.fit();
       else if (b.dataset.x === "search") searchRegion(m, rid => openRegion(m, rid, () => draw(true)));
     });
     draw(false);
-    if (m.kind === "world" && wrap.clientWidth < 700) { vb = { x: 470, y: 30, w: 530, h: 420 }; setVB(); }
+    if (m.kind === "world" && wrap.clientWidth < 700) st.show({ x: 470, y: 30, w: 530, h: 420 });
     if (thenRegion) openRegion(m, thenRegion, () => draw(true));
   }
 
@@ -501,8 +531,14 @@
       const zip = await JSZip.loadAsync(file);
       const d = JSON.parse(await zip.file("data.json").async("string"));
       if (d.app !== "travel-map") throw new Error("이 앱의 백업 파일이 아니에요");
-      if (!(await confirmBox(`백업에 지도 ${d.maps.length}개, 기록 ${d.entries.length}개, 사진 ${d.photos.length}장이 있어요. 지금 기록에 더해서 되살릴까요?`, "되살리기", false))) return;
-      const mapIds = {}, entryIds = {}, photoIds = {};
+      d.walks = d.walks || [];
+      if (!(await confirmBox(`백업에 지도 ${d.maps.length}개, 기록 ${d.entries.length}개, 산책 ${d.walks.length}개, 사진 ${d.photos.length}장이 있어요. 지금 기록에 더해서 되살릴까요?`, "되살리기", false))) return;
+      const mapIds = {}, entryIds = {}, photoIds = {}, walkIds = {};
+      for (const w of d.walks) {
+        const { id, created_at, created_by, ...rest } = w;
+        const nw = await store.createWalk(rest);
+        walkIds[id] = nw ? nw.id : ((S.data.walks.find(x => x.source_key && x.source_key === w.source_key) || {}).id || null);
+      }
       for (const m of d.maps) mapIds[m.id] = (await store.createMap(m.kind, m.title)).id;
       for (const e of d.entries) entryIds[e.id] = (await store.createEntry({ map_id: mapIds[e.map_id], region_id: e.region_id, visited_on: e.visited_on, memo: e.memo || "" })).id;
       let i = 0;
@@ -510,13 +546,295 @@
         setProg(i++ / Math.max(1, d.photos.length), `사진 ${i} / ${d.photos.length} 되살리는 중…`);
         const tf = zip.file(`thumbs/${p.id}.jpg`), ff = zip.file(`photos/${p.id}.jpg`); if (!tf || !ff) continue;
         const t = new Blob([await tf.async("uint8array")], { type: "image/jpeg" }), f = new Blob([await ff.async("uint8array")], { type: "image/jpeg" });
-        const np = await store.addPhoto({ map_id: mapIds[p.map_id], region_id: p.region_id, entry_id: entryIds[p.entry_id] || null, width: p.width, height: p.height }, t, f);
+        if (p.walk_id && !walkIds[p.walk_id]) continue;
+        const meta = { map_id: p.map_id ? mapIds[p.map_id] : null, region_id: p.region_id, entry_id: entryIds[p.entry_id] || null, width: p.width, height: p.height };
+        if (p.walk_id) meta.walk_id = walkIds[p.walk_id];
+        const np = await store.addPhoto(meta, t, f);
         photoIds[p.id] = np.id;
       }
       for (const c of d.covers || []) if (photoIds[c.photo_id]) await store.setCover(mapIds[c.map_id], c.region_id, photoIds[c.photo_id]);
       setProg(1, "되살리기를 마쳤어요");
       await refresh(); toast("백업에서 되살렸어요");
     } catch (e) { toast("되살리지 못했어요: " + e.message, 4500); }
+  }
+
+  // ═════════════════ 발자취 ═════════════════
+  const WALK_KINDS = { kr: { geo: "krfull", title: "한국 발자취", minDiv: 400 }, world: { geo: "world", title: "세계 발자취", minDiv: 20000 } };
+  const inKorea = w => w.bbox && w.bbox[0] > 32.5 && w.bbox[2] < 39 && w.bbox[1] > 124 && w.bbox[3] < 132;
+  const walksFor = kind => S.data.walks.filter(w => kind === "world" || inKorea(w));
+  const walkerOf = w => WALKERS.find(x => x.key && x.key === S.wkey[w.walker]) || (DEMO && (WALKERS[+w.walker] || WALKERS[0])) || { name: (w.walker || "").split("@")[0] || "?", color: "#8a7fb0" };
+  const colorOf = w => (w.together ? TOGETHER.color : walkerOf(w).color);
+  const km = m => (m >= 10000 ? (m / 1000).toFixed(0) : (m / 1000).toFixed(1)) + "km";
+  const hm = s => { if (s == null) return "-"; const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60); return h ? `${h}시간 ${m}분` : `${m}분`; };
+  const localDate = iso => { if (!iso) return null; const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
+  const clock = iso => iso ? new Date(iso).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" }) : "";
+  function walkPath(w, kind) {
+    const key = w.id + "|" + kind;
+    if (!S.pathCache[key]) S.pathCache[key] = window.Walk.pathD(w, S.geo[WALK_KINDS[kind].geo].proj);
+    return S.pathCache[key];
+  }
+  function walkCenter(w, kind) {
+    const f = window.Walk.projector(S.geo[WALK_KINDS[kind].geo].proj);
+    return f((w.bbox[0] + w.bbox[2]) / 2, (w.bbox[1] + w.bbox[3]) / 2);
+  }
+  function legendHTML() {
+    return `<div class="legend">${WALKERS.map(x => `<span><i style="background:${esc(x.color)}"></i>${esc(x.name)}</span>`).join("")}<span><i style="background:${esc(TOGETHER.color)}"></i>${esc(TOGETHER.name)}</span></div>`;
+  }
+  function walkSVG(kind, walks, { interactive = false, viewBox = null, stays = false, dots = false } = {}) {
+    const g = S.geo[WALK_KINDS[kind].geo];
+    let regions = "";
+    for (const r of g.regions) regions += `<path class="region empty-r" d="${r.d}"${interactive ? ` data-r="${r.id}"` : ""}/>`;
+    const borders = g.borders ? `<path class="borders" d="${g.borders}"/>` : "";
+    const byColor = {};
+    for (const w of walks) (byColor[colorOf(w)] = byColor[colorOf(w)] || []).push(w);
+    let tracks = "";
+    for (const [c, ws] of Object.entries(byColor)) tracks += `<g class="trk" stroke="${esc(c)}">${ws.map(w => `<path d="${walkPath(w, kind)}"/>`).join("")}</g>`;
+    let dotHTML = "";
+    if (dots) for (const w of walks) { const [x, y] = walkCenter(w, kind); dotHTML += `<path class="wdot" stroke="${esc(colorOf(w))}" d="M${x.toFixed(2)},${y.toFixed(2)}h0"/>`; }
+    let stayHTML = "";
+    if (stays) { const f = window.Walk.projector(g.proj); for (const w of walks) (w.stays || []).forEach((s) => { const [x, y] = f(s.lat, s.lon); stayHTML += `<path class="stay" d="M${x.toFixed(2)},${y.toFixed(2)}h0"/>`; }); }
+    const hits = interactive ? `<g class="hits">${walks.map(w => `<path data-w="${w.id}" d="${walkPath(w, kind)}"/>`).join("")}</g>` : "";
+    const labels = interactive ? `<g class="labels">${g.regions.map(r => `<text x="${r.c[0]}" y="${r.c[1]}" data-lw="${r.lw}" data-n="${r.name.length}">${esc(r.name)}</text>`).join("")}</g>` : "";
+    const vb = viewBox ? `${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}` : `0 0 ${g.w} ${g.h}`;
+    return `<svg viewBox="${vb}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(WALK_KINDS[kind].title)}"><g>${regions}</g>${borders}${dotHTML}${tracks}${stayHTML}${labels}${hits}</svg>`;
+  }
+  function walkBox(walks, kind, minUnits) {
+    const f = window.Walk.projector(S.geo[WALK_KINDS[kind].geo].proj);
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const w of walks) for (const [la, lo] of [[w.bbox[0], w.bbox[1]], [w.bbox[2], w.bbox[3]]]) { const [x, y] = f(la, lo); x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    let w = Math.max(x1 - x0, minUnits), h = Math.max(y1 - y0, minUnits);
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2; w *= 1.35; h *= 1.35;
+    return { x: cx - w / 2, y: cy - h / 2, w, h };
+  }
+
+  function renderWalkMaps(v) {
+    const total = S.data.walks.reduce((a, w) => a + (w.distance_m || 0), 0);
+    v.innerHTML = `${DEMO ? `<div class="banner" style="margin-bottom:16px">체험 모드예요. 처음 보이는 산책은 예시예요.</div>` : ""}
+      <div class="cards">${["kr", "world"].map(k => {
+        const ws = walksFor(k), dist = ws.reduce((a, w) => a + (w.distance_m || 0), 0);
+        return `<article class="card"><button class="card-map" data-wopen="${k}" aria-label="${WALK_KINDS[k].title} 열기">${walkSVG(k, ws, { dots: true })}</button>
+          <div class="card-foot"><div class="t"><b>${WALK_KINDS[k].title}</b><span>산책 ${ws.length}번 · ${km(dist)}</span></div></div></article>`;
+      }).join("")}</div>
+      <div class="fab-row stack">
+        <button class="btn primary block" data-act="import">${ICON.upload}GPX 파일 불러오기</button>
+        <button class="btn block" data-act="howto">기록 앱 사용법</button>
+        <p class="lbl" style="text-align:center;margin:0">지금까지 ${S.data.walks.length}번, 모두 ${km(total)} 걸었어요</p>
+      </div>`;
+    v.onclick = e => {
+      const t = e.target.closest("[data-wopen],[data-act]"); if (!t) return;
+      if (t.dataset.wopen) openWalkMap(t.dataset.wopen);
+      else if (t.dataset.act === "import") importWalks();
+      else if (t.dataset.act === "howto") howTo();
+    };
+  }
+
+  function howTo() {
+    sheet(`<div class="sheet-head gutter"><button class="iconbtn" data-close aria-label="닫기">${ICON.close}</button><h2>기록 앱 사용법</h2><span></span></div>
+      <div class="gutter stack">
+        <section class="panel"><h3>1. 산책할 때 기록하기</h3><p>GPS 기록 앱으로 산책을 기록해요. 화면을 꺼도 계속 기록돼요.<br>예: 아이폰은 'Open GPX Tracker', 갤럭시는 'GPS Logger' 같은 앱. 위치 권한은 '항상 허용'으로 해 주세요.</p></section>
+        <section class="panel"><h3>2. GPX 파일로 저장하기</h3><p>산책이 끝나면 기록 앱에서 GPX로 내보내기(공유)를 눌러 '파일'이나 '내 파일'에 저장해요.</p></section>
+        <section class="panel"><h3>3. 여기로 불러오기</h3><p>발자취 지도 화면의 'GPX 파일 불러오기'를 누르고 저장한 파일을 고르면 돼요. 여러 개를 한 번에 골라도 돼요. 같은 파일을 두 번 올려도 한 번만 저장돼요.</p></section>
+        <section class="panel"><h3>자동으로 계산해 주는 것</h3><p>한 곳에 8분 넘게 머문 곳(카페, 영화관 등)을 찾아서 머문 시간으로 따로 빼요. 그 사이 GPS가 흔들린 선은 그리지 않아요. 기록이 5분 넘게 끊긴 구간도 선으로 잇지 않아요.</p></section>
+      </div>`, { full: true });
+  }
+
+  function importWalks() {
+    let items = [];
+    const s = sheet(`
+      <div class="sheet-head gutter"><button class="iconbtn" data-close aria-label="닫기">${ICON.close}</button><h2>GPX 불러오기</h2><span></span></div>
+      <div class="gutter stack">
+        <label class="btn block" for="gx-file">${ICON.upload}파일 고르기</label><input type="file" id="gx-file" multiple hidden>
+        <div id="gx-list" class="stack"></div>
+        <button class="btn primary block" id="gx-save" hidden>저장</button>
+      </div>`, { full: true });
+    const list = $("#gx-list", s.el), save = $("#gx-save", s.el);
+    function draw() {
+      list.innerHTML = items.map((it, i) => it.err ? `<div class="panel"><h3>${esc(it.file)}</h3><p class="err">${esc(it.err)}</p></div>` : `
+        <div class="panel">
+          <div class="field"><label for="gx-t${i}">이름</label><input id="gx-t${i}" data-i="${i}" data-f="title" value="${esc(it.title)}" maxlength="60"></div>
+          <p>${esc(fmtDate(localDate(it.a.started_at)))} ${esc(clock(it.a.started_at))} · ${km(it.a.distance_m)} · 걸은 시간 ${hm(it.a.moving_s)}${it.a.stays.length ? ` · 머문 곳 ${it.a.stays.length}곳 (${hm(it.a.stay_s)})` : ""}</p>
+          ${it.dup ? `<p class="err">이미 올린 산책이라 건너뛰어요.</p>` : `<div class="seg2" role="group" aria-label="함께 걸었나요"><button data-i="${i}" data-tg="0" aria-pressed="${!it.together}">혼자</button><button data-i="${i}" data-tg="1" aria-pressed="${it.together}">함께</button></div>`}
+        </div>`).join("");
+      const n = items.filter(it => it.a && !it.dup).length;
+      save.hidden = !n; save.textContent = `산책 ${n}개 저장`;
+    }
+    $("#gx-file", s.el).onchange = async e => {
+      const files = [...e.target.files]; e.target.value = "";
+      for (const f of files) {
+        try {
+          const parsed = window.Walk.parseGPX(await f.text());
+          const a = window.Walk.analyze(parsed);
+          const dup = S.data.walks.some(w => w.source_key === a.source_key) || items.some(it => it.a && it.a.source_key === a.source_key);
+          items.push({ file: f.name, a, dup, together: false, title: parsed.name || `${fmtDate(localDate(a.started_at)).replace(/\.$/, "")} 산책` });
+        } catch (err) { items.push({ file: f.name, err: err.message }); }
+      }
+      draw();
+    };
+    list.addEventListener("input", e => { const t = e.target.closest("[data-f]"); if (t) items[+t.dataset.i].title = t.value; });
+    list.addEventListener("click", e => { const b = e.target.closest("[data-tg]"); if (b) { items[+b.dataset.i].together = b.dataset.tg === "1"; draw(); } });
+    save.onclick = async () => {
+      save.disabled = true; let ok = 0;
+      for (const it of items) {
+        if (!it.a || it.dup) continue;
+        const { points, ...a } = it.a;
+        try { const r = await store.createWalk({ ...a, title: it.title.trim() || "산책", together: it.together, ...(DEMO ? { walker: S.me } : {}) }); if (r) ok++; }
+        catch (err) { toast("저장하지 못했어요: " + err.message, 4500); }
+      }
+      await refresh(); s.close(); render(); toast(`산책 ${ok}개를 저장했어요`);
+    };
+  }
+
+  function openWalkMap(kind, focusId) {
+    const g = S.geo[WALK_KINDS[kind].geo];
+    const wrap = document.createElement("section"); wrap.className = "mapview";
+    document.body.appendChild(wrap);
+    const st = stage(wrap, { x: 0, y: 0, w: g.w, h: g.h }, {
+      minDiv: WALK_KINDS[kind].minDiv,
+      onScale: (svg, k) => svg.classList.toggle("zin", k > (kind === "kr" ? 6 : 250)),
+      onTap: (x, y) => {
+        const el = document.elementFromPoint(x, y);
+        const w = el && el.closest && el.closest("[data-w]");
+        if (w) return openWalk(w.dataset.w, () => draw(true));
+        const r = el && el.closest && el.closest("[data-r]");
+        if (r) { const reg = g.regions.find(q => q.id === r.dataset.r); if (reg) toast(reg.group && !reg.name.startsWith(reg.group) ? reg.group + " " + reg.name : reg.name, 1500); }
+      },
+    });
+    function draw(keep) {
+      const ws = walksFor(kind);
+      wrap.innerHTML = `
+        <header class="topbar gutter" style="top:0"><button class="iconbtn" data-x="back" aria-label="뒤로">${ICON.back}</button>
+          <h1>${WALK_KINDS[kind].title}<small>산책 ${ws.length}번 · ${km(ws.reduce((a, w) => a + (w.distance_m || 0), 0))}</small></h1><span></span></header>
+        <div class="mapstage">${walkSVG(kind, ws, { interactive: true, dots: true })}
+          ${legendHTML()}
+          ${ws.length ? `<div class="hint" style="top:52px">선을 누르면 그 산책을 볼 수 있어요</div>` : `<div class="hint" style="top:52px">GPX 파일을 불러오면 여기에 선이 그려져요</div>`}
+          ${ZOOMCTL}
+        </div>`;
+      const svg = $(".mapstage > svg", wrap);
+      if (keep) st.setVB(svg); else st.labels();
+      st.bind(svg);
+      setTimeout(() => { const h = $(".hint", wrap); if (h) h.remove(); }, 3500);
+    }
+    wrap.addEventListener("click", e => {
+      const b = e.target.closest("[data-x]"); if (!b) return;
+      if (b.dataset.x === "back") { wrap.remove(); render(); }
+      else if (b.dataset.x === "in") st.zoomCenter(1.8);
+      else if (b.dataset.x === "out") st.zoomCenter(1 / 1.8);
+      else if (b.dataset.x === "fit") st.fit();
+    });
+    draw(false);
+    const ws = walksFor(kind);
+    const focus = focusId ? ws.filter(w => w.id === focusId) : null;
+    if (focus && focus.length) st.show(walkBox(focus, kind, kind === "kr" ? 3 : 0.1));
+    else if (ws.length) {
+      // 가장 최근 산책 주변을 먼저 보여줘요
+      const recent = [...ws].sort((a, b) => (b.started_at || b.created_at).localeCompare(a.started_at || a.created_at))[0];
+      st.show(walkBox([recent], kind, kind === "kr" ? 5 : 0.25));
+    } else if (kind === "world" && wrap.clientWidth < 700) st.show({ x: 470, y: 30, w: 530, h: 420 });
+  }
+
+  function renderWalkList(v) {
+    const ws = [...S.data.walks].sort((a, b) => (b.started_at || b.created_at).localeCompare(a.started_at || a.created_at));
+    if (!ws.length) { v.innerHTML = `<div class="empty"><b>아직 산책 기록이 없어요</b>발자취 지도에서 GPX 파일을 불러와 보세요.</div>`; return; }
+    let html = "", month = "";
+    for (const w of ws) {
+      const d = localDate(w.started_at) || localDate(w.created_at);
+      const mo = `${d.slice(0, 4)}년 ${+d.slice(5, 7)}월`;
+      if (mo !== month) { if (month) html += `</div>`; html += `<h2 class="month">${mo}</h2><div class="tl">`; month = mo; }
+      const kind = inKorea(w) ? "kr" : "world";
+      const box = walkBox([w], kind, 0.0001);
+      const shape = `<svg viewBox="${box.x} ${box.y} ${box.w} ${box.h}" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><g class="trk" stroke="${esc(colorOf(w))}"><path d="${walkPath(w, kind)}"/></g></svg>`;
+      const pc = S.data.photos.filter(p => p.walk_id === w.id).length;
+      html += `<button class="tl-item" data-walk="${w.id}"><span class="th shape">${shape}</span>
+        <span class="tx"><b>${esc(w.title || "산책")}</b><span>${fmtDate(d)} · ${km(w.distance_m || 0)} · ${hm(w.moving_s)}</span><span>${w.together ? esc(TOGETHER.name) : esc(walkerOf(w).name) + " 혼자"}${(w.stays || []).length ? ` · 머문 곳 ${(w.stays || []).length}곳` : ""}${pc ? ` · 사진 ${pc}장` : ""}</span></span></button>`;
+    }
+    v.innerHTML = `<div class="stack">${html}</div></div>`;
+    v.onclick = e => { const b = e.target.closest("[data-walk]"); if (b) openWalk(b.dataset.walk, () => render()); };
+  }
+
+  async function openWalk(id, onChange) {
+    const s = sheet(`<div id="wk"></div>`, { full: true });
+    let pending = [];
+    async function draw() {
+      const w = S.data.walks.find(x => x.id === id); if (!w) { s.close(); return; }
+      const kind = inKorea(w) ? "kr" : "world";
+      const photos = S.data.photos.filter(p => p.walk_id === id).sort((a, b) => a.created_at.localeCompare(b.created_at));
+      await urlsFor(photos);
+      const total = w.started_at && w.ended_at ? (Date.parse(w.ended_at) - Date.parse(w.started_at)) / 1000 : null;
+      const box = walkBox([w], kind, kind === "kr" ? 2 : 0.08);
+      $("#wk", s.el).innerHTML = `
+        <div class="sheet-head gutter"><button class="iconbtn" data-close aria-label="닫기">${ICON.close}</button><h2>${esc(w.title || "산책")}<small>${fmtDate(localDate(w.started_at))} ${esc(clock(w.started_at))}${w.ended_at ? " ~ " + esc(clock(w.ended_at)) : ""}</small></h2>
+          <button class="iconbtn" data-a="del" aria-label="산책 삭제">${ICON.trash}</button></div>
+        <div class="gutter stack">
+          <button class="walkmap" data-a="map" aria-label="큰 지도에서 보기">${walkSVG(kind, [w], { viewBox: box, stays: true })}</button>
+          <div class="stats">
+            <div><span>거리</span><b>${km(w.distance_m || 0)}</b></div>
+            <div><span>걸은 시간</span><b>${hm(w.moving_s)}</b></div>
+            <div><span>머문 시간</span><b>${hm(w.stay_s || 0)}</b></div>
+            <div><span>전체</span><b>${hm(total)}</b></div>
+          </div>
+          <div class="seg2" role="group" aria-label="함께 걸었나요"><button data-a="tg" data-v="0" aria-pressed="${!w.together}">${esc(walkerOf(w).name)} 혼자</button><button data-a="tg" data-v="1" aria-pressed="${!!w.together}">${esc(TOGETHER.name)}</button></div>
+          <div class="field"><label for="wk-title">이름</label><input id="wk-title" maxlength="60" value="${esc(w.title || "")}"></div>
+          <div class="field"><label for="wk-memo">메모</label><textarea id="wk-memo" maxlength="5000" placeholder="어디를 걸었는지, 뭐가 좋았는지">${esc(w.memo || "")}</textarea></div>
+          ${(w.stays || []).length ? `<div class="field"><span class="lbl">머문 곳 (지도의 흰 점)</span>${w.stays.map((st, i) => `
+            <div class="stayrow"><span>${esc(clock(st.start))} ~ ${esc(clock(st.end))} · ${hm((Date.parse(st.end) - Date.parse(st.start)) / 1000)}</span>
+            <input data-stay="${i}" value="${esc(st.memo || "")}" placeholder="예: 카페, 영화관" maxlength="60" aria-label="머문 곳 메모"></div>`).join("")}</div>` : ""}
+          <div class="field"><span class="lbl">사진</span><div class="grid" id="wk-grid">
+            ${photos.map(p => `<button data-a="view" data-id="${p.id}" aria-label="사진 크게 보기"><img loading="lazy" alt="" src="${esc(S.urls[p.thumb_path] || "")}"></button>`).join("")}
+            ${pending.map(p => `<div class="ph"><img alt="" src="${p.url}"></div>`).join("")}
+          </div><label class="btn block" for="wk-file" style="margin-top:6px">${ICON.photo}사진 추가</label><input type="file" id="wk-file" accept="image/*" multiple hidden></div>
+          <div id="wk-prog" hidden><div class="progress"><i></i></div><p class="lbl" id="wk-ptxt" style="margin:6px 0 0"></p></div>
+          <button class="btn primary block" data-a="save">저장</button>
+        </div>`;
+      $("#wk-file", s.el).onchange = e => { for (const f of e.target.files) pending.push({ file: f, url: URL.createObjectURL(f) }); e.target.value = ""; draw(); };
+    }
+    s.el.addEventListener("click", async e => {
+      const b = e.target.closest("[data-a]"); if (!b) return;
+      const w = S.data.walks.find(x => x.id === id);
+      const a = b.dataset.a;
+      if (a === "tg") {
+        const keep = { title: $("#wk-title", s.el).value.trim() || w.title, memo: $("#wk-memo", s.el).value };
+        await store.updateWalk(id, { together: b.dataset.v === "1", ...keep }); await after();
+      }
+      else if (a === "map") { s.close(); openWalkMap(inKorea(w) ? "kr" : "world", id); }
+      else if (a === "del") {
+        if (await confirmBox(`'${w.title || "산책"}'을(를) 삭제할까요? 사진도 함께 지워져요.`)) { await store.deleteWalk(id); s.close(); await refresh(); onChange && onChange(); toast("산책을 삭제했어요"); }
+      } else if (a === "view") walkPhoto(S.data.photos.find(p => p.id === b.dataset.id), after);
+      else if (a === "save") {
+        b.disabled = true;
+        const stays = (w.stays || []).map((st, i) => { const inp = s.el.querySelector(`[data-stay="${i}"]`); return { ...st, memo: inp ? inp.value.trim() : st.memo }; });
+        try {
+          await store.updateWalk(id, { title: $("#wk-title", s.el).value.trim() || "산책", memo: $("#wk-memo", s.el).value, stays });
+          if (pending.length) {
+            const prog = $("#wk-prog", s.el), bar = $(".progress i", s.el), ptxt = $("#wk-ptxt", s.el); prog.hidden = false;
+            let failed = 0;
+            for (let i = 0; i < pending.length; i++) {
+              ptxt.textContent = `사진 ${i + 1} / ${pending.length} 올리는 중…`; bar.style.width = (i / pending.length * 100) + "%";
+              try { const c = await window.ImageTools.compress(pending[i].file); await store.addPhoto({ map_id: null, region_id: "walk", entry_id: null, walk_id: id, width: c.width, height: c.height }, c.thumb, c.full); }
+              catch (err) { console.error(err); failed++; }
+            }
+            pending.forEach(p => URL.revokeObjectURL(p.url)); pending = [];
+            if (failed) toast(`사진 ${failed}장은 올리지 못했어요`, 4000);
+          }
+          await after(); toast("저장했어요");
+        } catch (err) { b.disabled = false; toast("저장하지 못했어요: " + err.message, 4500); }
+      }
+    });
+    async function after() { await refresh(); await draw(); onChange && onChange(); }
+    await draw();
+  }
+
+  async function walkPhoto(p, after) {
+    await urlsFor([p], "full");
+    const w = document.createElement("div"); w.className = "viewer"; w.setAttribute("role", "dialog");
+    w.innerHTML = `<div class="vbar"><button class="iconbtn" data-v="close" aria-label="닫기">${ICON.close}</button><span></span><span style="width:44px"></span></div>
+      <div class="vimg"><img alt="" src="${esc(S.urls[p.full_path] || S.urls[p.thumb_path])}"></div>
+      <div class="vact"><button class="btn" data-v="del" style="color:#ff8a9c">${ICON.trash}삭제</button></div>`;
+    document.body.appendChild(w);
+    w.addEventListener("click", async e => {
+      const b = e.target.closest("[data-v]"); if (!b) return;
+      if (b.dataset.v === "close") w.remove();
+      else if (await confirmBox("이 사진을 삭제할까요?")) { await store.deletePhoto(p); w.remove(); await after(); toast("사진을 삭제했어요"); }
+    });
   }
 
   // ───────── login ─────────
@@ -577,13 +895,37 @@
     await add(w, "w-704", "2026-02-10", "(예시) 다낭 미케비치", "베트남", 140);
     await add(w, "w-250", "2024-09-05", "(예시) 파리 에펠탑", "프랑스", 250);
     await add(w, "w-036", "2023-12-30", "(예시) 시드니 새해 불꽃", "호주", 40);
+    // 예시 산책 (연남동·홍대 주변)
+    const mk = (route, startISO, stayAt, stayMin) => {
+      let t = Date.parse(startISO) / 1000; const pts = []; let rnd = 7;
+      const r = () => { rnd = (rnd * 16807) % 2147483647; return rnd / 2147483647 - 0.5; };
+      route.forEach((a, i) => {
+        const b = route[i + 1]; if (!b) return;
+        const n = Math.max(2, Math.round(Math.hypot((b[0] - a[0]) * 111000, (b[1] - a[1]) * 88000) / 6));
+        for (let k = 0; k < n; k++) { const f = k / n; pts.push([a[0] + (b[0] - a[0]) * f + r() * 0.00003, a[1] + (b[1] - a[1]) * f + r() * 0.00003, t]); t += 5; }
+        if (i === stayAt) for (let k = 0; k < stayMin * 6; k++) { pts.push([b[0] + r() * 0.0002, b[1] + r() * 0.0002, t]); t += 10; }
+      });
+      pts.push([...route[route.length - 1], t]);
+      return window.Walk.analyze({ segs: [pts], name: "" });
+    };
+    const A = [37.5602, 126.9236], B = [37.5590, 126.9262], C = [37.5566, 126.9240], D = [37.5546, 126.9226], E = [37.5531, 126.9200], F = [37.5582, 126.9302], G = [37.5612, 126.9338];
+    const walks = [
+      [[A, B, C, D, E], "2026-10-25T05:00:00Z", 2, 35, "(예시) 연남동에서 홍대까지", false, 0],
+      [[A, B, C, F, G], "2026-10-27T09:00:00Z", -1, 0, "(예시) 경의선숲길", true, 0],
+      [[G, F, C, B, A], "2026-10-29T10:30:00Z", -1, 0, "(예시) 숲길 거꾸로", false, 1],
+      [[A, B, C, D], "2026-10-31T06:00:00Z", -1, 0, "(예시) 저녁 산책", false, 1],
+    ];
+    for (const [route, st, stayAt, stayMin, title, together, who] of walks) {
+      const a = mk(route, st, stayAt, stayMin); delete a.points;
+      await store.createWalk({ ...a, title, together, walker: String(who) });
+    }
   }
 
   // ───────── boot ─────────
   async function loadGeo() {
     if (window.__MAPDATA) { S.geo = window.__MAPDATA; return; }
-    const [kr, world, seoul] = await Promise.all(["data/kr.json", "data/world.json", "data/seoul.json"].map(u => fetch(u).then(r => r.json())));
-    S.geo = { kr, world, seoul };
+    const [kr, world, seoul, krfull] = await Promise.all(["data/kr.json", "data/world.json", "data/seoul.json", "data/krfull.json"].map(u => fetch(u).then(r => r.json())));
+    S.geo = { kr, world, seoul, krfull };
   }
   async function start() {
     if (!DEMO) {
@@ -592,6 +934,7 @@
       let ok = false; try { ok = await store.isMember(); } catch (e) { return login("서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요. (" + e.message + ")"); }
       if (!ok) { await store.signOut(); return login("이 이메일은 앱 멤버로 등록되어 있지 않아요. 설정 가이드의 '멤버 이메일'을 확인해 주세요."); }
     }
+    const sess = await store.session(); S.me = DEMO ? "0" : ((sess && sess.email) || "");
     await refresh();
     shell();
   }

@@ -7,7 +7,7 @@
   // ───────────── 체험 모드: IndexedDB(안 되면 메모리) ─────────────
   function LocalStore() {
     let db = null;
-    let data = { maps: [], entries: [], photos: [], covers: [] };
+    let data = { maps: [], entries: [], photos: [], covers: [], walks: [] };
     const mem = new Map();
     const urlCache = new Map();
 
@@ -42,7 +42,7 @@
       async init() {
         db = await idb();
         const saved = await tx("kv", "readonly", s => s && s.get("data"));
-        if (saved && saved.maps) data = saved;
+        if (saved && saved.maps) { data = saved; data.walks = data.walks || []; }
         return { seeded: !!(saved && saved.maps) };
       },
       async session() { return { email: "체험 모드" }; },
@@ -65,7 +65,8 @@
       },
       async addPhoto(meta, thumb, full) {
         const id = uid();
-        const p = { id, ...meta, thumb_path: `${meta.map_id}/${id}_t.jpg`, full_path: `${meta.map_id}/${id}_f.jpg`, bytes: thumb.size + full.size, created_at: meta.created_at || now() };
+        const dir = meta.map_id || "walks";
+        const p = { id, ...meta, thumb_path: `${dir}/${id}_t.jpg`, full_path: `${dir}/${id}_f.jpg`, bytes: thumb.size + full.size, created_at: meta.created_at || now() };
         await putBlob(p.thumb_path, thumb); await putBlob(p.full_path, full);
         data.photos.push(p); await save(); return p;
       },
@@ -74,6 +75,15 @@
         data.photos = data.photos.filter(x => x.id !== p.id);
         data.covers = data.covers.filter(c => c.photo_id !== p.id);
         if (!skipSave) await save();
+      },
+      async createWalk(w) {
+        if (w.source_key && data.walks.some(x => x.source_key === w.source_key)) return null;
+        const r = { id: uid(), created_at: now(), walker: "demo", title: "", memo: "", together: false, ...w }; data.walks.push(r); await save(); return r;
+      },
+      async updateWalk(id, patch) { Object.assign(data.walks.find(w => w.id === id), patch); await save(); },
+      async deleteWalk(id) {
+        for (const p of data.photos.filter(p => p.walk_id === id)) await this.deletePhoto(p, true);
+        data.walks = data.walks.filter(w => w.id !== id); await save();
       },
       async setCover(map_id, region_id, photo_id) {
         data.covers = data.covers.filter(c => !(c.map_id === map_id && c.region_id === region_id));
@@ -126,8 +136,8 @@
       async signOut() { await sb.auth.signOut(); },
       async isMember() { const d = must(await sb.rpc("is_member")); return !!d; },
       async getAll() {
-        const [maps, entries, photos, covers] = await Promise.all(["maps", "entries", "photos", "covers"].map(all));
-        return { maps, entries, photos, covers };
+        const [maps, entries, photos, covers, walks] = await Promise.all(["maps", "entries", "photos", "covers", "walks"].map(all));
+        return { maps, entries, photos, covers, walks };
       },
       async createMap(kind, title) { return must(await sb.from("maps").insert({ kind, title }).select().single()); },
       async updateMap(id, patch) { must(await sb.from("maps").update(patch).eq("id", id)); },
@@ -145,7 +155,8 @@
       },
       async addPhoto(meta, thumb, full) {
         const id = uid();
-        const thumb_path = `${meta.map_id}/${id}_t.jpg`, full_path = `${meta.map_id}/${id}_f.jpg`;
+        const dir = meta.map_id || "walks";
+        const thumb_path = `${dir}/${id}_t.jpg`, full_path = `${dir}/${id}_f.jpg`;
         const opt = { contentType: "image/jpeg", cacheControl: "31536000", upsert: false };
         must(await bucket().upload(thumb_path, thumb, opt));
         must(await bucket().upload(full_path, full, opt));
@@ -156,6 +167,19 @@
       async deletePhoto(p) {
         await removePaths([p.thumb_path, p.full_path]);
         must(await sb.from("photos").delete().eq("id", p.id));
+      },
+      async createWalk(w) {
+        if (w.source_key) {
+          const ex = must(await sb.from("walks").select("id").eq("source_key", w.source_key).limit(1));
+          if (ex.length) return null;
+        }
+        return must(await sb.from("walks").insert(w).select().single());
+      },
+      async updateWalk(id, patch) { must(await sb.from("walks").update(patch).eq("id", id)); },
+      async deleteWalk(id) {
+        const ps = must(await sb.from("photos").select("thumb_path,full_path").eq("walk_id", id));
+        await removePaths(ps.flatMap(p => [p.thumb_path, p.full_path]));
+        must(await sb.from("walks").delete().eq("id", id));
       },
       async setCover(map_id, region_id, photo_id) {
         must(await sb.from("covers").delete().eq("map_id", map_id).eq("region_id", region_id));

@@ -209,3 +209,37 @@ main { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) +
 .login h1 { margin: 0; font: 600 30px/1.2 var(--font-display); color: var(--accent); text-align: center; }
 .login p { margin: 0; text-align: center; color: var(--muted); }
 .err { color: var(--danger); font-size: 14px; }
+
+/* ───── 모드 전환 (여행기록 / 발자취) ───── */
+.modebar { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 54px); z-index: 19; background: var(--bg); padding-bottom: 12px; }
+.seg.mode { margin: 0; border: 0; background: var(--line); border-radius: 12px; padding: 3px; gap: 3px; }
+.seg.mode button { border: 0; margin: 0; border-radius: 9px; padding: 8px 0; font-weight: 600; color: var(--muted); }
+.seg.mode button[aria-selected="true"] { background: var(--surface); color: var(--fg); box-shadow: 0 1px 4px rgba(40, 24, 90, .12); }
+
+/* ───── 발자취 선 ───── */
+.trk { opacity: .88; fill: none; }
+.trk path { fill: none; stroke-opacity: .45; stroke-width: 3.5px; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.card-map .trk path { stroke-width: 2px; }
+.tl-item .trk path { stroke-width: 2.6px; stroke-opacity: .8; }
+.zin .wdot { display: none; }
+.walkmap .trk path { stroke-width: 4px; }
+.wdot { stroke-width: 7px; stroke-linecap: round; stroke-opacity: .55; vector-effect: non-scaling-stroke; fill: none; }
+.stay { stroke: var(--surface); stroke-width: 11px; stroke-linecap: round; vector-effect: non-scaling-stroke; fill: none; filter: drop-shadow(0 0 1.5px rgba(0,0,0,.45)); }
+.hits path { fill: none; stroke: transparent; stroke-width: 20px; vector-effect: non-scaling-stroke; pointer-events: stroke; cursor: pointer; }
+.legend { position: absolute; left: 50%; transform: translateX(-50%); top: 10px; display: flex; gap: 12px; background: var(--surface); padding: 6px 12px; border-radius: 99px; box-shadow: var(--shadow); font-size: 12px; white-space: nowrap; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend i { width: 14px; height: 4px; border-radius: 2px; opacity: .8; }
+.walkmap { display: block; width: 100%; aspect-ratio: 4 / 3; max-width: 100%; border: 0; padding: 0; border-radius: 16px; overflow: hidden; background: var(--land); }
+.walkmap svg { width: 100%; height: 100%; display: block; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.stats div { background: var(--surface); border-radius: 12px; padding: 10px 8px; display: grid; gap: 2px; text-align: center; min-width: 0; }
+.stats span { font-size: 12px; color: var(--muted); }
+.stats b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.seg2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.seg2 button { border: 1.5px solid var(--line); background: var(--surface); border-radius: 12px; padding: 10px; font-weight: 600; color: var(--muted); }
+.seg2 button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--fg); }
+.stayrow { display: grid; gap: 6px; background: var(--surface); border-radius: 12px; padding: 10px 12px; }
+.stayrow span { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.stayrow input { border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 9px 12px; font-size: 16px; width: 100%; }
+.th.shape { display: grid; place-items: center; background: var(--accent-soft); padding: 6px; }
+.th.shape svg { width: 100%; height: 100%; }
