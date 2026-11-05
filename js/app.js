@@ -7,7 +7,7 @@
   const LIMIT = (CFG.STORAGE_LIMIT_MB || 1024) * 1024 * 1024;
   const root = document.getElementById("app");
 
-  const S = { data: { maps: [], entries: [], photos: [], covers: [], walks: [] }, geo: {}, tab: "maps", openMapId: null, urls: {}, mode: "travel", me: "", pathCache: {}, wkey: {} };
+  const S = { data: { maps: [], entries: [], photos: [], covers: [], walks: [] }, geo: {}, tab: "maps", openMapId: null, urls: {}, mode: "travel", me: "", pathCache: {}, wkey: {}, walkFilter: null };
   try { if (localStorage.getItem("tm-mode") === "walk") S.mode = "walk"; } catch (e) { /* ignore */ }
   const WALKERS = CFG.WALKERS || [];
   const TOGETHER = CFG.TOGETHER || { name: "함께", color: "#b06ce8" };
@@ -577,9 +577,6 @@
     const f = window.Walk.projector(S.geo[WALK_KINDS[kind].geo].proj);
     return f((w.bbox[0] + w.bbox[2]) / 2, (w.bbox[1] + w.bbox[3]) / 2);
   }
-  function legendHTML() {
-    return `<div class="legend">${WALKERS.map(x => `<span><i style="background:${esc(x.color)}"></i>${esc(x.name)}</span>`).join("")}<span><i style="background:${esc(TOGETHER.color)}"></i>${esc(TOGETHER.name)}</span></div>`;
-  }
   function walkSVG(kind, walks, { interactive = false, viewBox = null, stays = false, dots = false } = {}) {
     const g = S.geo[WALK_KINDS[kind].geo];
     let regions = "";
@@ -596,7 +593,7 @@
     const hits = interactive ? `<g class="hits">${walks.map(w => `<path data-w="${w.id}" d="${walkPath(w, kind)}"/>`).join("")}</g>` : "";
     const labels = interactive ? `<g class="labels">${g.regions.map(r => `<text x="${r.c[0]}" y="${r.c[1]}" data-lw="${r.lw}" data-n="${r.name.length}">${esc(r.name)}</text>`).join("")}</g>` : "";
     const vb = viewBox ? `${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}` : `0 0 ${g.w} ${g.h}`;
-    return `<svg viewBox="${vb}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(WALK_KINDS[kind].title)}"><g>${regions}</g>${borders}${dotHTML}${tracks}${stayHTML}${labels}${hits}</svg>`;
+    return `<svg class="wsvg" viewBox="${vb}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(WALK_KINDS[kind].title)}"><g>${regions}</g>${borders}${dotHTML}${tracks}${stayHTML}${labels}${hits}</svg>`;
   }
   function walkBox(walks, kind, minUnits) {
     const f = window.Walk.projector(S.geo[WALK_KINDS[kind].geo].proj);
@@ -684,52 +681,153 @@
     };
   }
 
-  function openWalkMap(kind, focusId) {
-    const g = S.geo[WALK_KINDS[kind].geo];
+  // ───────── 발자취 지도 (실제 지도) ─────────
+  const LL_SRC = { kr: "data/krmap.json", world: "data/worldmap.json" };
+  const LL_VIEW = { kr: [[33.15, 125.6], [38.6, 129.55]], world: [[-56, -168], [76, 178]] };
+  const LL_FADE = { kr: [10.5, 12.5], world: [4.5, 6.5] }; // 이 확대 구간에서 구역 지도가 실제 지도로 바뀌어요
+  async function loadLL(kind) {
+    S.ll = S.ll || {};
+    if (!S.ll[kind]) S.ll[kind] = (window.__LLDATA && window.__LLDATA[kind]) || await fetch(LL_SRC[kind]).then(r => r.json());
+    return S.ll[kind];
+  }
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  function walkLatLngs(w) { return w.track.segs.map(s => window.Walk.decode(s.p)); }
+  function matchFilter(w) {
+    const f = S.walkFilter;
+    if (f == null) return true;
+    if (f === "t") return !!w.together;
+    return !w.together && walkerOf(w) === WALKERS[+f];
+  }
+  function legendHTML() {
+    const chip = (f, name, color) => `<button data-lf="${f}" aria-pressed="${S.walkFilter === f}" class="${S.walkFilter != null && S.walkFilter !== f ? "dim" : ""}"><i style="background:${esc(color)}"></i>${esc(name)}</button>`;
+    return `<div class="legend" role="group" aria-label="누구의 산책만 볼지">${WALKERS.map((x, i) => chip(String(i), x.name, x.color)).join("")}${chip("t", TOGETHER.name, TOGETHER.color)}</div>`;
+  }
+
+  async function openWalkMap(kind, focusId) {
     const wrap = document.createElement("section"); wrap.className = "mapview";
     document.body.appendChild(wrap);
-    const st = stage(wrap, { x: 0, y: 0, w: g.w, h: g.h }, {
-      minDiv: WALK_KINDS[kind].minDiv,
-      onScale: (svg, k) => svg.classList.toggle("zin", k > (kind === "kr" ? 6 : 250)),
-      onTap: (x, y) => {
-        const el = document.elementFromPoint(x, y);
-        const w = el && el.closest && el.closest("[data-w]");
-        if (w) return openWalk(w.dataset.w, () => draw(true));
-        const r = el && el.closest && el.closest("[data-r]");
-        if (r) { const reg = g.regions.find(q => q.id === r.dataset.r); if (reg) toast(reg.group && !reg.name.startsWith(reg.group) ? reg.group + " " + reg.name : reg.name, 1500); }
-      },
+    wrap.innerHTML = `
+      <header class="topbar gutter" style="top:0"><button class="iconbtn" data-x="back" aria-label="뒤로">${ICON.back}</button>
+        <h1>${WALK_KINDS[kind].title}<small id="wm-sub"></small></h1><span></span></header>
+      <div class="mapstage"><div class="lmap" id="wm-map"></div><div id="wm-legend"></div>${ZOOMCTL}</div>`;
+    const sub = $("#wm-sub", wrap), legend = $("#wm-legend", wrap);
+    let data;
+    try { data = await loadLL(kind); } catch (e) { toast("지도를 불러오지 못했어요: " + e.message, 4000); wrap.remove(); return; }
+    const [F0, F1] = LL_FADE[kind];
+    const map = L.map($("#wm-map", wrap), {
+      zoomControl: false, minZoom: kind === "kr" ? 6 : 1, maxZoom: 19, zoomSnap: 0.25, wheelPxPerZoomLevel: 90,
+      maxBounds: kind === "kr" ? [[30, 119], [42, 136]] : [[-85, -220], [85, 220]], maxBoundsViscosity: 0.7, worldCopyJump: false,
     });
-    function draw(keep) {
-      const ws = walksFor(kind);
-      wrap.innerHTML = `
-        <header class="topbar gutter" style="top:0"><button class="iconbtn" data-x="back" aria-label="뒤로">${ICON.back}</button>
-          <h1>${WALK_KINDS[kind].title}<small>산책 ${ws.length}번 · ${km(ws.reduce((a, w) => a + (w.distance_m || 0), 0))}</small></h1><span></span></header>
-        <div class="mapstage">${walkSVG(kind, ws, { interactive: true, dots: true })}
-          ${legendHTML()}
-          ${ws.length ? `<div class="hint" style="top:52px">선을 누르면 그 산책을 볼 수 있어요</div>` : `<div class="hint" style="top:52px">GPX 파일을 불러오면 여기에 선이 그려져요</div>`}
-          ${ZOOMCTL}
-        </div>`;
-      const svg = $(".mapstage > svg", wrap);
-      if (keep) st.setVB(svg); else st.labels();
-      st.bind(svg);
-      setTimeout(() => { const h = $(".hint", wrap); if (h) h.remove(); }, 3500);
+    map.attributionControl.setPrefix(false);
+    // 실제 지도 (무료 오픈 지도). 연결이 안 되면 OpenStreetMap 기본 지도로 바꿔요.
+    const tiles = L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
+      subdomains: "abcd", maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>',
+    });
+    let errs = 0;
+    tiles.on("tileerror", () => {
+      if (++errs !== 6) return;
+      tiles.setUrl("https://tile.openstreetmap.org/{z}/{x}/{y}.png");
+      map.attributionControl.removeAttribution(tiles.options.attribution);
+      tiles.options.attribution = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
+      map.attributionControl.addAttribution(tiles.options.attribution);
+    });
+    // 구역 지도
+    map.createPane("dist").style.zIndex = 350;
+    map.createPane("dlabels").style.zIndex = 360;
+    map.getPane("dlabels").style.pointerEvents = "none";
+    const distR = L.canvas({ pane: "dist", padding: 0.3 });
+    const obj = data.topo.objects.r;
+    const fc = topojson.feature(data.topo, obj);
+    if (kind === "world") { // 날짜변경선(경도 180도)을 넘는 나라가 지도를 가로지르지 않게 이어 붙여요
+      const fix = ring => { for (let i = 1; i < ring.length; i++) { const d = ring[i][0] - ring[i - 1][0]; if (d > 180) ring[i][0] -= 360; else if (d < -180) ring[i][0] += 360; } };
+      for (const f of fc.features) { const g = f.geometry; if (!g) continue; (g.type === "Polygon" ? [g.coordinates] : g.coordinates).forEach(poly => poly.forEach(fix)); }
     }
+    const land = css("--land") || "#dfdae9", line = css("--land-line") || "#ffffff";
+    const dist = L.geoJSON(fc, {
+      pane: "dist", renderer: distR,
+      style: () => ({ color: line, weight: 0.8, fillColor: land, fillOpacity: 1, opacity: 1 }),
+      onEachFeature: (f, layer) => layer.on("click", e => tapRegion(f.properties, e.latlng)),
+    }).addTo(map);
+    let borders = null;
+    if (kind === "kr") {
+      const mesh = topojson.mesh(data.topo, obj, (a, b) => a !== b && a.properties.sd !== b.properties.sd);
+      borders = L.geoJSON(mesh, { pane: "dist", renderer: distR, interactive: false, style: () => ({ color: "#a39db2", weight: 1.6, opacity: 1 }) }).addTo(map);
+    }
+    const labels = fc.features.map(f => {
+      const m = L.marker(f.properties.c, { pane: "dlabels", interactive: false, keyboard: false, icon: L.divIcon({ className: "dlabel", html: `<span>${esc(f.properties.name.split(" ").pop())}</span>`, iconSize: null }) });
+      m._lw = f.properties.lw; m._n = f.properties.name.split(" ").pop().length; return m.addTo(map);
+    });
+    function fade() {
+      const z = map.getZoom(), f = Math.max(0, Math.min(1, (z - F0) / (F1 - F0)));
+      if (f > 0 && !map.hasLayer(tiles)) tiles.addTo(map);
+      if (f === 0 && map.hasLayer(tiles)) map.removeLayer(tiles);
+      dist.setStyle({ fillOpacity: 1 - f, opacity: 1 - f * 0.55, weight: 0.8 + f * 0.8 });
+      if (borders) borders.setStyle({ opacity: 1 - f * 0.5 });
+      const k = 256 * Math.pow(2, z) / 360; // 경도 1도당 화면 픽셀
+      for (const m of labels) { const el = m.getElement(); if (el) el.style.display = f < 1 && m._lw * k >= m._n * 12 + 8 ? "" : "none"; }
+      map.getPane("dlabels").style.opacity = String(1 - f);
+      dots && map.getPane("wdots").style.setProperty("display", z < F0 ? "" : "none");
+    }
+    const tb = b => L.latLngBounds([b[0], b[1]], [b[2], b[3]]);
+    function tapRegion(p, latlng) {
+      const z = map.getZoom();
+      if (z >= F1) return; // 실제 지도에서는 선을 누를 수 있게 지역 확대는 하지 않아요
+      toast(p.group && !p.name.startsWith(p.group) ? `${p.group} ${p.name}` : p.name, 1400);
+      const city = p.city && data.cities[p.city];
+      const fits = b => b && b[1] <= b[3] ? map.getBoundsZoom(tb(b), false, L.point(40, 40)) : -1;
+      if (city && fits(city.b) > z + 0.6) return map.flyToBounds(tb(city.b), { padding: [20, 20], duration: 0.6 });
+      if (fits(p.b) > z + 0.6) return map.flyToBounds(tb(p.b), { padding: [20, 20], duration: 0.6 });
+      map.flyTo(latlng, Math.min(z + 2, 17), { duration: 0.6 });
+    }
+    // 산책 선
+    let trackLayer = null, dots = null;
+    map.createPane("wdots").style.zIndex = 400;
+    map.createPane("whits").style.zIndex = 470;
+    const hitR = L.svg({ pane: "whits" });
+    function drawTracks() {
+      if (trackLayer) map.removeLayer(trackLayer);
+      if (dots) map.removeLayer(dots);
+      trackLayer = L.layerGroup().addTo(map); dots = L.layerGroup().addTo(map);
+      const ws = walksFor(kind).filter(matchFilter);
+      const colors = [...new Set(ws.map(colorOf))];
+      colors.forEach((c, i) => {
+        const gp = "wglow" + i, lp = "wline" + i;
+        if (!map.getPane(gp)) { map.createPane(gp).style.zIndex = 410 + i; map.createPane(lp).style.zIndex = 430 + i; }
+        map.getPane(gp).style.opacity = "0.9"; map.getPane(lp).style.opacity = "0.92"; // 겹쳐도 이 진하기에서 멈춰요
+        const gr = L.svg({ pane: gp }), lr = L.svg({ pane: lp });
+        for (const w of ws.filter(x => colorOf(x) === c)) {
+          const lls = walkLatLngs(w);
+          L.polyline(lls, { renderer: gr, pane: gp, color: c, weight: 11, opacity: 0.16, lineCap: "round", lineJoin: "round", interactive: false }).addTo(trackLayer);
+          L.polyline(lls, { renderer: lr, pane: lp, color: c, weight: 3.5, opacity: 0.6, lineCap: "round", lineJoin: "round", interactive: false }).addTo(trackLayer);
+          L.polyline(lls, { renderer: hitR, pane: "whits", color: "#000", weight: 20, opacity: 0, lineCap: "round" })
+            .on("click", () => openWalk(w.id, () => drawTracks())).addTo(trackLayer);
+          L.circleMarker([(w.bbox[0] + w.bbox[2]) / 2, (w.bbox[1] + w.bbox[3]) / 2], { pane: "wdots", radius: 5, stroke: true, color: "#fff", weight: 1.5, fillColor: c, fillOpacity: 0.85 })
+            .on("click", () => map.flyToBounds(tb(w.bbox), { padding: [40, 40], maxZoom: 16, duration: 0.8 })).addTo(dots);
+        }
+      });
+      const all = walksFor(kind);
+      sub.textContent = `산책 ${ws.length}번 · ${km(ws.reduce((a, w) => a + (w.distance_m || 0), 0))}` + (S.walkFilter != null ? ` (전체 ${all.length}번 중)` : "");
+      legend.innerHTML = legendHTML();
+      fade();
+    }
+    legend.addEventListener("click", e => {
+      const b = e.target.closest("[data-lf]"); if (!b) return;
+      S.walkFilter = S.walkFilter === b.dataset.lf ? null : b.dataset.lf;
+      drawTracks();
+    });
+    map.on("zoomend", fade);
+    const fitAll = () => map.fitBounds(LL_VIEW[kind], { padding: [6, 6] });
     wrap.addEventListener("click", e => {
       const b = e.target.closest("[data-x]"); if (!b) return;
-      if (b.dataset.x === "back") { wrap.remove(); render(); }
-      else if (b.dataset.x === "in") st.zoomCenter(1.8);
-      else if (b.dataset.x === "out") st.zoomCenter(1 / 1.8);
-      else if (b.dataset.x === "fit") st.fit();
+      if (b.dataset.x === "back") { map.remove(); wrap.remove(); render(); }
+      else if (b.dataset.x === "in") map.zoomIn(1);
+      else if (b.dataset.x === "out") map.zoomOut(1);
+      else if (b.dataset.x === "fit") fitAll();
     });
-    draw(false);
-    const ws = walksFor(kind);
-    const focus = focusId ? ws.filter(w => w.id === focusId) : null;
-    if (focus && focus.length) st.show(walkBox(focus, kind, kind === "kr" ? 3 : 0.1));
-    else if (ws.length) {
-      // 가장 최근 산책 주변을 먼저 보여줘요
-      const recent = [...ws].sort((a, b) => (b.started_at || b.created_at).localeCompare(a.started_at || a.created_at))[0];
-      st.show(walkBox([recent], kind, kind === "kr" ? 5 : 0.25));
-    } else if (kind === "world" && wrap.clientWidth < 700) st.show({ x: 470, y: 30, w: 530, h: 420 });
+    const focus = focusId && S.data.walks.find(w => w.id === focusId);
+    const place = () => { map.invalidateSize(); if (focus) map.fitBounds(tb(focus.bbox), { padding: [40, 40], maxZoom: 17 }); else fitAll(); };
+    place(); drawTracks();
+    requestAnimationFrame(() => { place(); fade(); });
   }
 
   function renderWalkList(v) {

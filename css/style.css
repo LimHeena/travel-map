@@ -110,7 +110,7 @@ main { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) +
 /* map view */
 .mapview { position: fixed; inset: 0; z-index: 26; background: var(--bg); display: flex; flex-direction: column; padding-top: env(safe-area-inset-top, 0px); }
 .mapstage { position: relative; flex: 1; overflow: hidden; touch-action: none; }
-.mapstage svg { width: 100%; height: 100%; display: block; user-select: none; -webkit-user-select: none; }
+.mapstage > svg { width: 100%; height: 100%; display: block; user-select: none; -webkit-user-select: none; }
 .region { stroke: var(--land-line); stroke-width: .7; vector-effect: non-scaling-stroke; cursor: pointer; }
 .region.empty-r { fill: var(--land); }
 .region.visited { fill: var(--visited); }
@@ -226,9 +226,11 @@ main { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) +
 .wdot { stroke-width: 7px; stroke-linecap: round; stroke-opacity: .55; vector-effect: non-scaling-stroke; fill: none; }
 .stay { stroke: var(--surface); stroke-width: 11px; stroke-linecap: round; vector-effect: non-scaling-stroke; fill: none; filter: drop-shadow(0 0 1.5px rgba(0,0,0,.45)); }
 .hits path { fill: none; stroke: transparent; stroke-width: 20px; vector-effect: non-scaling-stroke; pointer-events: stroke; cursor: pointer; }
-.legend { position: absolute; left: 50%; transform: translateX(-50%); top: 10px; display: flex; gap: 12px; background: var(--surface); padding: 6px 12px; border-radius: 99px; box-shadow: var(--shadow); font-size: 12px; white-space: nowrap; }
-.legend span { display: inline-flex; align-items: center; gap: 5px; }
-.legend i { width: 14px; height: 4px; border-radius: 2px; opacity: .8; }
+.legend { position: absolute; left: 50%; transform: translateX(-50%); top: 10px; z-index: 500; display: flex; gap: 4px; background: var(--surface); padding: 4px; border-radius: 99px; box-shadow: var(--shadow); font-size: 13px; white-space: nowrap; }
+.legend button { display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; padding: 6px 10px; border-radius: 99px; font-weight: 600; color: var(--fg); }
+.legend button[aria-pressed="true"] { background: var(--accent-soft); }
+.legend button.dim { opacity: .4; }
+.legend i { width: 16px; height: 5px; border-radius: 3px; box-shadow: 0 0 6px currentColor; }
 .walkmap { display: block; width: 100%; aspect-ratio: 4 / 3; max-width: 100%; border: 0; padding: 0; border-radius: 16px; overflow: hidden; background: var(--land); }
 .walkmap svg { width: 100%; height: 100%; display: block; }
 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
@@ -243,3 +245,13 @@ main { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) +
 .stayrow input { border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 9px 12px; font-size: 16px; width: 100%; }
 .th.shape { display: grid; place-items: center; background: var(--accent-soft); padding: 6px; }
 .th.shape svg { width: 100%; height: 100%; }
+
+/* ───── 발자취 실제 지도 ───── */
+.lmap { position: absolute; inset: 0; background: var(--bg); font-family: var(--font-body); }
+.lmap .leaflet-control-attribution { font-size: 10px; background: rgba(255,255,255,.75); }
+.mapview .lmap ~ .zoomctl { bottom: calc(30px + env(safe-area-inset-bottom, 0px)); z-index: 500; }
+.dlabel { background: none; border: 0; width: 0; height: 0; }
+.dlabel span { display: inline-block; transform: translate(-50%, -50%); white-space: nowrap; font-size: 11px; font-weight: 600; color: var(--fg);
+  text-shadow: 0 0 3px var(--bg), 0 0 3px var(--bg), 0 0 2px var(--bg); pointer-events: none; }
+.wsvg .borders { stroke: #a39db2; }
+.trk path { stroke-opacity: .55; }
