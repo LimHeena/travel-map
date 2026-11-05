@@ -1,10 +1,10 @@
 // 앱 화면 파일을 폰에 저장해 두어 빠르게 열리게 해요. (기록·사진은 서버에서 가져와요)
 // 앱 파일을 수정했다면 아래 버전 숫자를 올려 주세요.
-const VERSION = "v8";
+const VERSION = "v9";
 const SHELL = [
   "./", "index.html", "css/style.css", "manifest.json",
   "js/config.js", "js/image.js", "js/stores.js", "js/walk.js", "js/app.js",
-  "vendor/supabase.js", "vendor/jszip.min.js", "vendor/leaflet.js", "vendor/leaflet.css", "vendor/topojson-client.min.js",
+  "vendor/supabase.js", "vendor/jszip.min.js", "vendor/leaflet.js", "vendor/leaflet.css", "vendor/topojson-client.min.js", "vendor/tz.js",
   "data/kr.json", "data/world.json", "data/seoul.json", "data/krfull.json", "data/krmap.json", "data/worldmap.json", "icons/icon-192.png",
 ];
 self.addEventListener("install", e => {

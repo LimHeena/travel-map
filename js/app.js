@@ -566,8 +566,23 @@
   const colorOf = w => (w.together ? TOGETHER.color : walkerOf(w).color);
   const km = m => (m >= 10000 ? (m / 1000).toFixed(0) : (m / 1000).toFixed(1)) + "km";
   const hm = s => { if (s == null) return "-"; const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60); return h ? `${h}시간 ${m}분` : `${m}분`; };
-  const localDate = iso => { if (!iso) return null; const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
-  const clock = iso => iso ? new Date(iso).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" }) : "";
+  // 시간은 산책한 곳의 현지 시간으로 보여줘요 (GPS 위치로 시간대를 찾아요)
+  const DEVICE_TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (e) { return undefined; } })();
+  const tzOf = w => {
+    if (!w || !w.bbox || typeof tzlookup !== "function") return DEVICE_TZ;
+    try { return tzlookup((w.bbox[0] + w.bbox[2]) / 2, (w.bbox[1] + w.bbox[3]) / 2); } catch (e) { return DEVICE_TZ; }
+  };
+  const localDate = (iso, tz) => {
+    if (!iso) return null;
+    try { return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso)); }
+    catch (e) { const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); }
+  };
+  const clock = (iso, tz) => {
+    if (!iso) return "";
+    try { return new Date(iso).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit", timeZone: tz }); }
+    catch (e) { return new Date(iso).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" }); }
+  };
+  const tzNote = tz => (tz && DEVICE_TZ && tz !== DEVICE_TZ ? " (현지 시간)" : "");
   function walkPath(w, kind) {
     const key = w.id + "|" + kind;
     if (!S.pathCache[key]) S.pathCache[key] = window.Walk.pathD(w, S.geo[WALK_KINDS[kind].geo].proj);
@@ -649,7 +664,7 @@
       list.innerHTML = items.map((it, i) => it.err ? `<div class="panel"><h3>${esc(it.file)}</h3><p class="err">${esc(it.err)}</p></div>` : `
         <div class="panel">
           <div class="field"><label for="gx-t${i}">이름</label><input id="gx-t${i}" data-i="${i}" data-f="title" value="${esc(it.title)}" maxlength="60"></div>
-          <p>${esc(fmtDate(localDate(it.a.started_at)))} ${esc(clock(it.a.started_at))} · ${km(it.a.distance_m)} · 걸은 시간 ${hm(it.a.moving_s)}${it.a.stays.length ? ` · 머문 곳 ${it.a.stays.length}곳 (${hm(it.a.stay_s)})` : ""}</p>
+          <p>${esc(fmtDate(localDate(it.a.started_at, tzOf(it.a))))} ${esc(clock(it.a.started_at, tzOf(it.a)))}${tzNote(tzOf(it.a))} · ${km(it.a.distance_m)} · 걸은 시간 ${hm(it.a.moving_s)}${it.a.stays.length ? ` · 머문 곳 ${it.a.stays.length}곳 (${hm(it.a.stay_s)})` : ""}</p>
           ${it.dup ? `<p class="err">이미 올린 산책이라 건너뛰어요.</p>` : `<div class="seg2" role="group" aria-label="함께 걸었나요"><button data-i="${i}" data-tg="0" aria-pressed="${!it.together}">혼자</button><button data-i="${i}" data-tg="1" aria-pressed="${it.together}">함께</button></div>`}
         </div>`).join("");
       const n = items.filter(it => it.a && !it.dup).length;
@@ -662,7 +677,7 @@
           const parsed = window.Walk.parseGPX(await f.text());
           const a = window.Walk.analyze(parsed);
           const dup = S.data.walks.some(w => w.source_key === a.source_key) || items.some(it => it.a && it.a.source_key === a.source_key);
-          items.push({ file: f.name, a, dup, together: false, title: parsed.name || `${fmtDate(localDate(a.started_at)).replace(/\.$/, "")} 산책` });
+          items.push({ file: f.name, a, dup, together: false, title: parsed.name || `${fmtDate(localDate(a.started_at, tzOf(a))).replace(/\.$/, "")} 산책` });
         } catch (err) { items.push({ file: f.name, err: err.message }); }
       }
       draw();
@@ -827,7 +842,7 @@
     if (!ws.length) { v.innerHTML = `<div class="empty"><b>아직 산책 기록이 없어요</b>발자취 지도에서 GPX 파일을 불러와 보세요.</div>`; return; }
     let html = "", month = "";
     for (const w of ws) {
-      const d = localDate(w.started_at) || localDate(w.created_at);
+      const d = localDate(w.started_at, tzOf(w)) || localDate(w.created_at);
       const mo = `${d.slice(0, 4)}년 ${+d.slice(5, 7)}월`;
       if (mo !== month) { if (month) html += `</div>`; html += `<h2 class="month">${mo}</h2><div class="tl">`; month = mo; }
       const kind = inKorea(w) ? "kr" : "world";
@@ -847,12 +862,13 @@
     async function draw() {
       const w = S.data.walks.find(x => x.id === id); if (!w) { s.close(); return; }
       const kind = inKorea(w) ? "kr" : "world";
+      const tz = tzOf(w);
       const photos = S.data.photos.filter(p => p.walk_id === id).sort((a, b) => a.created_at.localeCompare(b.created_at));
       await urlsFor(photos);
       const total = w.started_at && w.ended_at ? (Date.parse(w.ended_at) - Date.parse(w.started_at)) / 1000 : null;
       const box = walkBox([w], kind, kind === "kr" ? 2 : 0.08);
       $("#wk", s.el).innerHTML = `
-        <div class="sheet-head gutter"><button class="iconbtn" data-close aria-label="닫기">${ICON.close}</button><h2>${esc(w.title || "산책")}<small>${fmtDate(localDate(w.started_at))} ${esc(clock(w.started_at))}${w.ended_at ? " ~ " + esc(clock(w.ended_at)) : ""}</small></h2>
+        <div class="sheet-head gutter"><button class="iconbtn" data-close aria-label="닫기">${ICON.close}</button><h2>${esc(w.title || "산책")}<small>${fmtDate(localDate(w.started_at, tz))} ${esc(clock(w.started_at, tz))}${w.ended_at ? " ~ " + esc(clock(w.ended_at, tz)) : ""}${tzNote(tz)}</small></h2>
           <button class="iconbtn" data-a="del" aria-label="산책 삭제">${ICON.trash}</button></div>
         <div class="gutter stack">
           <button class="walkmap" data-a="map" aria-label="큰 지도에서 보기">${walkSVG(kind, [w], { viewBox: box, stays: true })}</button>
@@ -866,7 +882,7 @@
           <div class="field"><label for="wk-title">이름</label><input id="wk-title" maxlength="60" value="${esc(w.title || "")}"></div>
           <div class="field"><label for="wk-memo">메모</label><textarea id="wk-memo" maxlength="5000" placeholder="어디를 걸었는지, 뭐가 좋았는지">${esc(w.memo || "")}</textarea></div>
           ${(w.stays || []).length ? `<div class="field"><span class="lbl">머문 곳 (지도의 흰 점)</span>${w.stays.map((st, i) => `
-            <div class="stayrow"><span>${esc(clock(st.start))} ~ ${esc(clock(st.end))} · ${hm((Date.parse(st.end) - Date.parse(st.start)) / 1000)}</span>
+            <div class="stayrow"><span>${esc(clock(st.start, tz))} ~ ${esc(clock(st.end, tz))} · ${hm((Date.parse(st.end) - Date.parse(st.start)) / 1000)}</span>
             <input data-stay="${i}" value="${esc(st.memo || "")}" placeholder="예: 카페, 영화관" maxlength="60" aria-label="머문 곳 메모"></div>`).join("")}</div>` : ""}
           <div class="field"><span class="lbl">사진</span><div class="grid" id="wk-grid">
             ${photos.map(p => `<button data-a="view" data-id="${p.id}" aria-label="사진 크게 보기"><img loading="lazy" alt="" src="${esc(S.urls[p.thumb_path] || "")}"></button>`).join("")}
