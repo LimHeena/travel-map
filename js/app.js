@@ -719,17 +719,9 @@
       maxBounds: kind === "kr" ? [[30, 119], [42, 136]] : [[-85, -220], [85, 220]], maxBoundsViscosity: 0.7, worldCopyJump: false,
     });
     map.attributionControl.setPrefix(false);
-    // 실제 지도 (무료 오픈 지도). 연결이 안 되면 OpenStreetMap 기본 지도로 바꿔요.
-    const tiles = L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
-      subdomains: "abcd", maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>',
-    });
-    let errs = 0;
-    tiles.on("tileerror", () => {
-      if (++errs !== 6) return;
-      tiles.setUrl("https://tile.openstreetmap.org/{z}/{x}/{y}.png");
-      map.attributionControl.removeAttribution(tiles.options.attribution);
-      tiles.options.attribution = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
-      map.attributionControl.addAttribution(tiles.options.attribution);
+    // 실제 지도: OpenStreetMap (무료, 가입·키 없음. 출처 표시 필수)
+    const tiles = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
     });
     // 구역 지도
     map.createPane("dist").style.zIndex = 350;
